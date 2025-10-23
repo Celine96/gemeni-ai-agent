@@ -32,7 +32,7 @@ async def generate_text(request: RequestBody):
     prompt = request.action.params.get("prompt")
     try:
         # Gemini 모델 초기화
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
         # 텍스트 생성
         response = model.generate_content(prompt)
@@ -88,7 +88,7 @@ async def generate_custom(request: RequestBody):
     
     try:
         # Gemini를 이용한 임베딩 생성
-        embedding_model = "models/text-embedding-004"
+        embedding_model = "text-embedding-004"
         q_embedding = genai.embed_content(
             model=embedding_model,
             content=prompt,
@@ -124,7 +124,7 @@ And please respond in Korean following the above format.
         
         # Gemini 모델로 응답 생성
         model = genai.GenerativeModel(
-            'gemini-1.5-flash',
+            'gemini-1.5-flash-latest',
             generation_config={
                 "temperature": 0,
                 "top_p": 0.95,
