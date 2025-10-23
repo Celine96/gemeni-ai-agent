@@ -23,7 +23,7 @@ Use this repo as a template to deploy a Python FastAPI server over Render.
 
 3. Simply click:
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/jhk0530/pycon-AI-messenger)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Celine96/gemeni-ai-agent)
 
 ## Note
 
