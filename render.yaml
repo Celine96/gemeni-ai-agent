@@ -1,13 +1,12 @@
 services:
+  # A Docker web service
   - type: web
     name: pycon-AI-messenger-q1t0
-    env: python
-    region: oregon
-    plan: free
-    buildCommand: pip install --upgrade pip setuptools wheel && pip install --no-cache-dir -r requirements.txt
+    runtime: python
+    plan: Starter
+    autoDeploy: false
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.7
-      - key: GEMINI_API_KEY
+      - key: GOOGLE_API_KEY
         sync: false
