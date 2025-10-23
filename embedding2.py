@@ -16,7 +16,7 @@ article_chunks = [
 
 # Gemini를 사용한 임베딩 생성
 chunk_embeddings = []
-embedding_model = "models/text-embedding-004"
+embedding_model = "text-embedding-004"
 
 for chunk in article_chunks:
     result = genai.embed_content(
