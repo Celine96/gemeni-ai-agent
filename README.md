@@ -1,7 +1,5 @@
 # pycon-AI-messenger
 
-<img width="3294" height="900" alt="스크린샷 2025-08-10 오후 10 36 30" src="https://github.com/user-attachments/assets/b6a75e85-1d61-40b1-9045-9239bfe46f7e" />
-
 
 ![GitHub](https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github)
 ![render](https://img.shields.io/badge/render-7500FF?style=for-the-badge&logo=render)
