@@ -32,7 +32,7 @@ async def generate_text(request: RequestBody):
     prompt = request.action.params.get("prompt")
     try:
         # Gemini 모델 초기화
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         # 텍스트 생성
         response = model.generate_content(prompt)
@@ -124,7 +124,7 @@ And please respond in Korean following the above format.
         
         # Gemini 모델로 응답 생성
         model = genai.GenerativeModel(
-            'gemini-2.5-pro',
+            'gemini-2.5-flash',
             generation_config={
                 "temperature": 0,
                 "top_p": 0.95,
