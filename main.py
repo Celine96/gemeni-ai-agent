@@ -37,11 +37,31 @@ class RequestBody(BaseModel):
     action: Action
 
 # 모델 설정
-GENERATION_MODEL = "gemini-2.5-flash"  # 빠르고 효율적
-EMBEDDING_MODEL = "models/embedding-001"
+GENERATION_MODEL = "gemini-2.5-flash"
+EMBEDDING_MODEL = "models/embedding-001"  # embeddings.pkl과 동일한 모델 사용
 
-# 유사도 임계값 (이 값보다 낮으면 일반 대화 모드)
+# 유사도 임계값
 SIMILARITY_THRESHOLD = 0.3
+
+# 안전 설정 (차단 완화)
+safety_settings = [
+    {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_NONE"
+    },
+]
 
 @app.post("/generate")
 async def generate_text(request: RequestBody):
@@ -50,12 +70,22 @@ async def generate_text(request: RequestBody):
     logger.info(f"[/generate] Received: {prompt}")
     
     try:
-        model = genai.GenerativeModel(GENERATION_MODEL)
+        model = genai.GenerativeModel(
+            GENERATION_MODEL,
+            safety_settings=safety_settings
+        )
         
         response = await asyncio.wait_for(
             asyncio.to_thread(model.generate_content, prompt),
             timeout=4.0
         )
+        
+        # 안전하게 텍스트 추출
+        if response.candidates and response.candidates[0].content.parts:
+            answer = response.text
+        else:
+            logger.warning(f"[/generate] No valid response: {response.prompt_feedback}")
+            answer = "죄송합니다. 응답을 생성할 수 없습니다. 다른 방식으로 질문해주시겠어요?"
         
         return {
             "version": "2.0",
@@ -63,7 +93,7 @@ async def generate_text(request: RequestBody):
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": response.text
+                            "text": answer
                         }
                     }
                 ]
@@ -91,14 +121,14 @@ async def generate_text(request: RequestBody):
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+                            "text": "죄송합니다. 일시적인 오류가 발생했습니다."
                         }
                     }
                 ]
             }
         }
 
-## Embeddings with Gemini
+## Embeddings
 import pickle
 
 try:
@@ -106,9 +136,9 @@ try:
         data = pickle.load(f)
         article_chunks = data["chunks"]
         chunk_embeddings = data["embeddings"]
-    logger.info(f"Embeddings loaded: {len(article_chunks)} chunks")
+    logger.info(f"Embeddings loaded: {len(article_chunks)} chunks, dim={len(chunk_embeddings[0])}")
 except FileNotFoundError:
-    logger.error("embeddings.pkl not found! RAG disabled")
+    logger.error("embeddings.pkl not found!")
     article_chunks = []
     chunk_embeddings = []
 
@@ -125,13 +155,12 @@ async def generate_custom(request: RequestBody):
     logger.info(f"[/custom] Received: {prompt}")
     
     try:
-        # RAG 사용 가능 여부 확인
+        # RAG 체크
         use_rag = False
         max_similarity = 0.0
         selected_context = ""
         
         if article_chunks and chunk_embeddings:
-            # 질문 임베딩 생성
             logger.info("[/custom] Generating embedding...")
             q_embedding = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -144,13 +173,11 @@ async def generate_custom(request: RequestBody):
             )
             q_embedding = q_embedding["embedding"]
             
-            # 유사도 계산
             similarities = [cosine_similarity(q_embedding, emb) for emb in chunk_embeddings]
             max_similarity = max(similarities) if similarities else 0.0
             
             logger.info(f"[/custom] Max similarity: {max_similarity:.3f}")
             
-            # 임계값 체크
             if max_similarity >= SIMILARITY_THRESHOLD:
                 use_rag = True
                 top_n = 2
@@ -162,43 +189,25 @@ async def generate_custom(request: RequestBody):
         
         # 프롬프트 구성
         if use_rag:
-            # RAG 모드: 부동산 데이터 사용
-            query = f"""Use the below context to answer the question. 
-You are REXA, a chatbot that is a real estate expert with 10 years of experience in taxation (capital gains tax, property holding tax, gift/inheritance tax, acquisition tax), auctions, civil law, and building law. 
-Respond politely and with a trustworthy tone, as a professional advisor would. 
-Keep your answers under 250 tokens.
+            query = f"""Based on the context below, answer the user's question professionally.
 
 Context:
-\"\"\"
 {selected_context}
-\"\"\"
 
 Question: {prompt}
 
-Respond in Korean in a professional and helpful manner.
-"""
+Provide a helpful answer in Korean. If the context doesn't contain the exact information, use what's available and note any limitations."""
             temperature = 0.0
         else:
-            # 일반 대화 모드: Gemini 자체 지식 사용
-            query = f"""You are REXA, a friendly and knowledgeable real estate expert chatbot with 10 years of experience.
+            query = f"""You are REXA, a friendly real estate expert assistant.
 
-The user said: "{prompt}"
+User question: {prompt}
 
-Instructions:
-- If this is a greeting or casual conversation, respond naturally and warmly
-- If this is a simple question (like math), answer it directly and briefly
-- If this is about real estate topics not in your specific knowledge base, politely explain you don't have detailed information on that specific topic, but offer to help with general real estate advice
-- Always maintain a professional yet friendly tone
-- Keep your response under 200 tokens
-- ALWAYS respond in Korean
-
-Respond naturally in Korean.
-"""
+Respond naturally in Korean. Be helpful, professional, and conversational."""
             temperature = 0.7
         
         logger.info(f"[/custom] Generating response (temp={temperature})...")
         
-        # Gemini 응답 생성
         model = genai.GenerativeModel(
             GENERATION_MODEL,
             generation_config={
@@ -206,7 +215,8 @@ Respond naturally in Korean.
                 "top_p": 0.95,
                 "top_k": 40,
                 "max_output_tokens": 512,
-            }
+            },
+            safety_settings=safety_settings
         )
         
         response = await asyncio.wait_for(
@@ -214,7 +224,13 @@ Respond naturally in Korean.
             timeout=4.0
         )
         
-        logger.info("[/custom] Success")
+        # 안전하게 응답 추출
+        if response.candidates and response.candidates[0].content.parts:
+            answer = response.text
+            logger.info("[/custom] Success")
+        else:
+            logger.warning(f"[/custom] Blocked: {response.prompt_feedback}")
+            answer = "죄송합니다. 해당 질문에 대한 응답을 생성할 수 없습니다. 다른 방식으로 질문해주시겠어요?"
         
         return {
             "version": "2.0",
@@ -222,7 +238,7 @@ Respond naturally in Korean.
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": response.text
+                            "text": answer
                         }
                     }
                 ]
@@ -237,7 +253,7 @@ Respond naturally in Korean.
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": "응답 생성에 시간이 오래 걸리고 있습니다. 잠시 후 다시 시도해주세요."
+                            "text": "응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
                         }
                     }
                 ]
@@ -251,14 +267,13 @@ Respond naturally in Korean.
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한번 질문해주시겠어요?"
+                            "text": "일시적인 오류가 발생했습니다. 다시 시도해주세요."
                         }
                     }
                 ]
             }
         }
 
-# Health check
 @app.get("/health")
 def health_check():
     return {
