@@ -26,6 +26,13 @@ if not api_key:
 genai.configure(api_key=api_key)
 logger.info("Gemini API configured successfully")
 
+# 사용 가능한 모델 확인 (디버깅용)
+try:
+    available_models = genai.list_models()
+    logger.info(f"Available models: {[m.name for m in available_models][:5]}")
+except Exception as e:
+    logger.warning(f"Could not list models: {e}")
+
 # Define Pydantic models for nested JSON structure
 class DetailParams(BaseModel):
     prompt: dict
@@ -44,6 +51,9 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
+
+# 사용할 모델
+MODEL_NAME = "gemini-pro"  # 안정적인 기본 모델
 
 @app.post("/custom")
 async def generate_custom(request: RequestBody):
@@ -67,12 +77,13 @@ Please provide a helpful answer in Korean. Keep your response under 250 tokens. 
 """
         
         logger.info(f"[/custom] User prompt: {prompt}")
+        logger.info(f"[/custom] Using model: {MODEL_NAME}")
         print(prompt)
         print(query)
         
-        # Gemini 모델 호출 (GPT의 temperature=0과 동일하게)
+        # Gemini 모델 호출
         model = genai.GenerativeModel(
-            'gemini-1.5-flash',
+            MODEL_NAME,
             generation_config={
                 "temperature": 0,  # GPT와 동일하게 0으로
                 "top_p": 0.95,
@@ -95,7 +106,7 @@ Please provide a helpful answer in Korean. Keep your response under 250 tokens. 
             
             if candidate.content and candidate.content.parts:
                 answer = response.text
-                logger.info("[/custom] Response generated successfully")
+                logger.info(f"[/custom] ✅ Success with {MODEL_NAME}")
             else:
                 logger.warning(f"[/custom] No content parts")
                 logger.warning(f"[/custom] Safety ratings: {candidate.safety_ratings}")
@@ -121,7 +132,7 @@ Please provide a helpful answer in Korean. Keep your response under 250 tokens. 
         }
         
     except Exception as e:
-        logger.error(f"[/custom] Error: {type(e).__name__}: {e}")
+        logger.error(f"[/custom] ❌ Error with {MODEL_NAME}: {type(e).__name__}: {e}")
         return {
             "version": "2.0",
             "template": {
@@ -140,6 +151,6 @@ Please provide a helpful answer in Korean. Keep your response under 250 tokens. 
 def health_check():
     return {
         "status": "healthy",
-        "model": "gemini-1.5-flash",
+        "model": MODEL_NAME,
         "mode": "rexa_chatbot"
     }
