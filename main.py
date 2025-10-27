@@ -13,7 +13,7 @@ app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"Hello": "REXA - Real Estate Expert Assistant"}
+    return {"Hello": "REXA - Real Estate Expert Assistant - GOOGLE Gemini ver"}
 
 # Configure Gemini API
 api_key = os.getenv("GOOGLE_API_KEY")
