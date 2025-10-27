@@ -53,7 +53,7 @@ safety_settings = {
 }
 
 # 사용할 모델
-MODEL_NAME = "gemini-2.5-flash"  # 안정적인 기본 모델
+MODEL_NAME = "gemini-2.5-pro"  # 안정적인 기본 모델
 
 @app.post("/custom")
 async def generate_custom(request: RequestBody):
