@@ -13,7 +13,7 @@ app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"Hello": "REXA - Real Estate Expert Assistant - GOOGLE Gemini ver"}
+    return {"Hello": "REXA - Real Estate Expert Assistant - GOOGLE GEMINI VER"}
 
 # Configure Gemini API
 api_key = os.getenv("GOOGLE_API_KEY")
@@ -50,23 +50,26 @@ async def generate_custom(request: RequestBody):
     prompt = request.action.params.get("prompt")
     
     try:
-        # REXA 페르소나로 메시지 구성
-        query = f"""You are REXA, a chatbot that is a real estate expert with 10 years of experience in taxation (capital gains tax, property holding tax, gift/inheritance tax, acquisition tax), auctions, civil law, and building law. 
-Respond politely and with a trustworthy tone, as a professional advisor would. 
-To ensure fast responses, keep your answers under 250 tokens.
+        # GPT와 동일한 프롬프트 구조 (Context만 제거)
+        query = f"""Use the below context to answer the question. 
+You are REXA, a chatbot that is a real estate expert with 10 years of experience in taxation (capital gains tax, property holding tax, gift/inheritance tax, acquisition tax), auctions, civil law, and building law. 
+Respond politely and with a trustworthy tone, as a professional advisor would. To ensure fast responses, keep your answers under 250 tokens. 
+If you don't know about the information ask the user once more time.
 
-User's question: {prompt}
+Question: {prompt}
 
-Please respond in Korean following the above format. If you don't have specific information about the topic, politely explain that and offer general real estate advice or guidance on where to find more information.
+And please respond in Korean following the above format.
 """
         
         logger.info(f"[/custom] User prompt: {prompt}")
+        print(prompt)
+        print(query)
         
-        # Gemini 모델 호출
+        # Gemini 모델 호출 (GPT의 temperature=0과 동일하게)
         model = genai.GenerativeModel(
-            'gemini-2.5-flash',
+            'gemini-1.5-flash',
             generation_config={
-                "temperature": 0.7,
+                "temperature": 0,  # GPT와 동일하게 0으로
                 "top_p": 0.95,
                 "top_k": 40,
                 "max_output_tokens": 512,
@@ -118,6 +121,6 @@ Please respond in Korean following the above format. If you don't have specific 
 def health_check():
     return {
         "status": "healthy",
-        "model": "gemini-2.5-flash",
+        "model": "gemini-1.5-flash",
         "mode": "rexa_chatbot"
     }
