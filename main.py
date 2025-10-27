@@ -53,7 +53,7 @@ safety_settings = {
 }
 
 # 사용할 모델
-MODEL_NAME = "gemini-2.5-pro"  # 안정적인 기본 모델
+MODEL_NAME = "gemini-2.5-flash-lite"  # 모델 테스트 중 성능이 가장 좋은 모델 
 
 @app.post("/custom")
 async def generate_custom(request: RequestBody):
@@ -88,7 +88,7 @@ Please provide a helpful answer in Korean. Keep your response under 250 tokens. 
                 "temperature": 0,  # GPT와 동일하게 0으로
                 "top_p": 0.95,
                 "top_k": 40,
-                "max_output_tokens": 512,
+                "max_output_tokens": 500,
             },
             safety_settings=safety_settings
         )
