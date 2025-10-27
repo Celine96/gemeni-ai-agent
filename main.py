@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import google.generativeai as genai
 
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -13,7 +15,7 @@ app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"Hello": "REXA - Real Estate Expert Assistant - GOOGLE GEMINI VER"}
+    return {"Hello": "REXA - Real Estate Expert Assistant"}
 
 # Configure Gemini API
 api_key = os.getenv("GOOGLE_API_KEY")
@@ -35,13 +37,13 @@ class Action(BaseModel):
 class RequestBody(BaseModel):
     action: Action
 
-# 안전 설정
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
+# 안전 설정 (더 강력하게)
+safety_settings = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
 
 @app.post("/custom")
 async def generate_custom(request: RequestBody):
@@ -50,15 +52,18 @@ async def generate_custom(request: RequestBody):
     prompt = request.action.params.get("prompt")
     
     try:
-        # GPT와 동일한 프롬프트 구조 (Context만 제거)
-        query = f"""Use the below context to answer the question. 
-You are REXA, a chatbot that is a real estate expert with 10 years of experience in taxation (capital gains tax, property holding tax, gift/inheritance tax, acquisition tax), auctions, civil law, and building law. 
-Respond politely and with a trustworthy tone, as a professional advisor would. To ensure fast responses, keep your answers under 250 tokens. 
-If you don't know about the information ask the user once more time.
+        # 더 안전한 프롬프트 구조
+        query = f"""You are REXA, a professional real estate advisor with 10 years of experience.
 
-Question: {prompt}
+Your expertise includes:
+- Real estate taxation (capital gains, property tax, gift/inheritance tax, acquisition tax)
+- Property auctions
+- Civil law
+- Building regulations
 
-And please respond in Korean following the above format.
+User question: {prompt}
+
+Please provide a helpful answer in Korean. Keep your response under 250 tokens. Be professional and trustworthy.
 """
         
         logger.info(f"[/custom] User prompt: {prompt}")
@@ -79,13 +84,27 @@ And please respond in Korean following the above format.
         
         response = model.generate_content(query)
         
+        # 상세한 응답 디버깅
+        logger.info(f"[/custom] Response received")
+        logger.info(f"[/custom] Candidates: {len(response.candidates) if response.candidates else 0}")
+        
         # 응답 검증
-        if response.candidates and response.candidates[0].content.parts:
-            answer = response.text
-            logger.info("[/custom] Response generated successfully")
+        if response.candidates and len(response.candidates) > 0:
+            candidate = response.candidates[0]
+            logger.info(f"[/custom] Finish reason: {candidate.finish_reason}")
+            
+            if candidate.content and candidate.content.parts:
+                answer = response.text
+                logger.info("[/custom] Response generated successfully")
+            else:
+                logger.warning(f"[/custom] No content parts")
+                logger.warning(f"[/custom] Safety ratings: {candidate.safety_ratings}")
+                answer = "죄송합니다. 응답을 생성할 수 없습니다. 다시 시도해주세요."
         else:
-            logger.warning(f"[/custom] Blocked response: {response.prompt_feedback}")
-            answer = "죄송합니다. 해당 질문에 대한 응답을 생성할 수 없습니다. 다른 방식으로 질문해주시겠어요?"
+            logger.warning(f"[/custom] No candidates")
+            if hasattr(response, 'prompt_feedback'):
+                logger.warning(f"[/custom] Prompt feedback: {response.prompt_feedback}")
+            answer = "죄송합니다. 응답을 생성할 수 없습니다. 질문을 다르게 표현해주세요."
         
         # Return the generated text in KakaoTalk format
         return {
