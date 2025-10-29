@@ -2,8 +2,9 @@ import logging
 import os
 import asyncio
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 import uuid
+from collections import deque
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -17,7 +18,7 @@ try:
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
-    logging.warning("redis package not installed. Queue functionality will be limited.")
+    logging.warning("redis package not installed. Using in-memory queue.")
 
 # 로깅 설정
 logging.basicConfig(
@@ -54,6 +55,12 @@ redis_client: Optional[Redis] = None
 server_healthy = True
 unhealthy_count = 0
 last_health_check = datetime.now()
+
+# In-memory queue fallback (when Redis is not available)
+in_memory_webhook_queue: deque = deque()
+in_memory_processing_queue: deque = deque()
+in_memory_failed_queue: deque = deque()
+use_in_memory_queue = False
 
 # ================================================================================
 # Pydantic Models
@@ -93,10 +100,11 @@ class HealthStatus(BaseModel):
 
 async def init_redis():
     """Initialize Redis connection"""
-    global redis_client
+    global redis_client, use_in_memory_queue
     
     if not REDIS_AVAILABLE:
-        logger.warning("Redis not available - queue functionality disabled")
+        logger.warning("⚠️ Redis package not installed - using in-memory queue")
+        use_in_memory_queue = True
         return
     
     try:
@@ -112,9 +120,12 @@ async def init_redis():
         )
         await redis_client.ping()
         logger.info(f"✅ Redis connected: {REDIS_HOST}:{REDIS_PORT}")
+        use_in_memory_queue = False
     except Exception as e:
-        logger.error(f"❌ Redis connection failed: {e}")
+        logger.warning(f"⚠️ Redis connection failed: {e}")
+        logger.info("📦 Using in-memory queue as fallback")
         redis_client = None
+        use_in_memory_queue = True
 
 async def close_redis():
     """Close Redis connection"""
@@ -125,10 +136,6 @@ async def close_redis():
 
 async def enqueue_webhook_request(request_id: str, request_body: dict) -> bool:
     """Add webhook request to queue"""
-    if not redis_client:
-        logger.warning("Redis not available - cannot enqueue request")
-        return False
-    
     try:
         queued_request = QueuedRequest(
             request_id=request_id,
@@ -137,11 +144,22 @@ async def enqueue_webhook_request(request_id: str, request_body: dict) -> bool:
             retry_count=0
         )
         
+        if use_in_memory_queue:
+            # Use in-memory queue
+            in_memory_webhook_queue.appendleft(queued_request)
+            logger.info(f"✅ Request {request_id} enqueued (in-memory)")
+            return True
+        
+        if not redis_client:
+            logger.warning("Queue not available - cannot enqueue request")
+            return False
+        
+        # Use Redis queue
         await redis_client.lpush(
             WEBHOOK_QUEUE_NAME,
             queued_request.model_dump_json()
         )
-        logger.info(f"✅ Request {request_id} enqueued")
+        logger.info(f"✅ Request {request_id} enqueued (Redis)")
         return True
     except Exception as e:
         logger.error(f"❌ Failed to enqueue request: {e}")
@@ -149,11 +167,19 @@ async def enqueue_webhook_request(request_id: str, request_body: dict) -> bool:
 
 async def dequeue_webhook_request() -> Optional[QueuedRequest]:
     """Get next webhook request from queue"""
-    if not redis_client:
-        return None
-    
     try:
-        # Move from webhook queue to processing queue (atomic operation)
+        if use_in_memory_queue:
+            # Use in-memory queue
+            if len(in_memory_webhook_queue) > 0:
+                request = in_memory_webhook_queue.pop()
+                in_memory_processing_queue.appendleft(request)
+                return request
+            return None
+        
+        if not redis_client:
+            return None
+        
+        # Use Redis queue
         result = await redis_client.brpoplpush(
             WEBHOOK_QUEUE_NAME,
             WEBHOOK_PROCESSING_QUEUE,
@@ -169,26 +195,54 @@ async def dequeue_webhook_request() -> Optional[QueuedRequest]:
 
 async def complete_webhook_request(request_id: str):
     """Mark webhook request as completed"""
-    if not redis_client:
-        return
-    
     try:
+        if use_in_memory_queue:
+            # Use in-memory queue
+            for req in list(in_memory_processing_queue):
+                if req.request_id == request_id:
+                    in_memory_processing_queue.remove(req)
+                    logger.info(f"✅ Request {request_id} completed (in-memory)")
+                    return
+            return
+        
+        if not redis_client:
+            return
+        
+        # Use Redis
         processing_items = await redis_client.lrange(WEBHOOK_PROCESSING_QUEUE, 0, -1)
         for item in processing_items:
             req = QueuedRequest.model_validate_json(item)
             if req.request_id == request_id:
                 await redis_client.lrem(WEBHOOK_PROCESSING_QUEUE, 1, item)
-                logger.info(f"✅ Request {request_id} completed")
+                logger.info(f"✅ Request {request_id} completed (Redis)")
                 break
     except Exception as e:
         logger.error(f"❌ Failed to complete request: {e}")
 
 async def fail_webhook_request(request_id: str, error_message: str):
     """Move failed request to failed queue or retry"""
-    if not redis_client:
-        return
-    
     try:
+        if use_in_memory_queue:
+            # Use in-memory queue
+            for req in list(in_memory_processing_queue):
+                if req.request_id == request_id:
+                    req.retry_count += 1
+                    req.error_message = error_message
+                    in_memory_processing_queue.remove(req)
+                    
+                    if req.retry_count >= MAX_RETRY_ATTEMPTS:
+                        in_memory_failed_queue.appendleft(req)
+                        logger.error(f"❌ Request {request_id} moved to failed queue after {req.retry_count} attempts (in-memory)")
+                    else:
+                        in_memory_webhook_queue.appendleft(req)
+                        logger.warning(f"⚠️ Request {request_id} re-queued (attempt {req.retry_count}/{MAX_RETRY_ATTEMPTS}) (in-memory)")
+                    return
+            return
+        
+        if not redis_client:
+            return
+        
+        # Use Redis
         processing_items = await redis_client.lrange(WEBHOOK_PROCESSING_QUEUE, 0, -1)
         for item in processing_items:
             req = QueuedRequest.model_validate_json(item)
@@ -199,21 +253,30 @@ async def fail_webhook_request(request_id: str, error_message: str):
                 if req.retry_count >= MAX_RETRY_ATTEMPTS:
                     await redis_client.lpush(WEBHOOK_FAILED_QUEUE, req.model_dump_json())
                     await redis_client.lrem(WEBHOOK_PROCESSING_QUEUE, 1, item)
-                    logger.error(f"❌ Request {request_id} moved to failed queue after {req.retry_count} attempts")
+                    logger.error(f"❌ Request {request_id} moved to failed queue after {req.retry_count} attempts (Redis)")
                 else:
                     await redis_client.lpush(WEBHOOK_QUEUE_NAME, req.model_dump_json())
                     await redis_client.lrem(WEBHOOK_PROCESSING_QUEUE, 1, item)
-                    logger.warning(f"⚠️ Request {request_id} re-queued (attempt {req.retry_count}/{MAX_RETRY_ATTEMPTS})")
+                    logger.warning(f"⚠️ Request {request_id} re-queued (attempt {req.retry_count}/{MAX_RETRY_ATTEMPTS}) (Redis)")
                 break
     except Exception as e:
         logger.error(f"❌ Failed to handle failed request: {e}")
 
 async def get_queue_sizes() -> tuple:
     """Get sizes of all queues"""
-    if not redis_client:
-        return 0, 0, 0
-    
     try:
+        if use_in_memory_queue:
+            # Use in-memory queue
+            return (
+                len(in_memory_webhook_queue),
+                len(in_memory_processing_queue),
+                len(in_memory_failed_queue)
+            )
+        
+        if not redis_client:
+            return 0, 0, 0
+        
+        # Use Redis
         queue_size = await redis_client.llen(WEBHOOK_QUEUE_NAME)
         processing_size = await redis_client.llen(WEBHOOK_PROCESSING_QUEUE)
         failed_size = await redis_client.llen(WEBHOOK_FAILED_QUEUE)
@@ -266,7 +329,8 @@ async def perform_health_check() -> bool:
         if not test_response or not test_response.candidates:
             return False
         
-        if redis_client:
+        # Only check Redis if we're using it
+        if redis_client and not use_in_memory_queue:
             await redis_client.ping()
         
         return True
@@ -484,7 +548,7 @@ async def health_check() -> HealthStatus:
         mode="rexa_chatbot",
         server_healthy=server_healthy,
         last_check=last_health_check.isoformat(),
-        redis_connected=redis_client is not None,
+        redis_connected=(redis_client is not None and not use_in_memory_queue),
         queue_size=queue_size,
         processing_queue_size=processing_size,
         failed_queue_size=failed_size
@@ -502,12 +566,10 @@ async def health_ping():
 @app.get("/queue/status")
 async def queue_status():
     """Get detailed queue status"""
-    if not redis_client:
-        return {"error": "Redis not available"}
-    
     queue_size, processing_size, failed_size = await get_queue_sizes()
     
     return {
+        "queue_type": "in-memory" if use_in_memory_queue else "redis",
         "webhook_queue": queue_size,
         "processing_queue": processing_size,
         "failed_queue": failed_size,
@@ -517,10 +579,22 @@ async def queue_status():
 @app.post("/queue/retry-failed")
 async def retry_failed_requests():
     """Manually retry all failed requests"""
-    if not redis_client:
-        return {"error": "Redis not available"}
-    
     try:
+        if use_in_memory_queue:
+            # Use in-memory queue
+            retry_count = len(in_memory_failed_queue)
+            while len(in_memory_failed_queue) > 0:
+                req = in_memory_failed_queue.pop()
+                req.retry_count = 0  # Reset retry count
+                in_memory_webhook_queue.appendleft(req)
+            
+            logger.info(f"✅ Retrying {retry_count} failed requests (in-memory)")
+            return {"retried": retry_count, "queue_type": "in-memory"}
+        
+        if not redis_client:
+            return {"error": "Queue not available"}
+        
+        # Use Redis
         failed_items = await redis_client.lrange(WEBHOOK_FAILED_QUEUE, 0, -1)
         retry_count = 0
         
@@ -532,8 +606,8 @@ async def retry_failed_requests():
         
         await redis_client.delete(WEBHOOK_FAILED_QUEUE)
         
-        logger.info(f"✅ Retrying {retry_count} failed requests")
-        return {"retried": retry_count}
+        logger.info(f"✅ Retrying {retry_count} failed requests (Redis)")
+        return {"retried": retry_count, "queue_type": "redis"}
         
     except Exception as e:
         logger.error(f"❌ Failed to retry requests: {e}")
