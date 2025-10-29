@@ -4,3 +4,6 @@ google-generativeai
 pydantic
 numpy
 python-dotenv
+
+# Redis for queue management
+redis[hiredis]==5.2.0
